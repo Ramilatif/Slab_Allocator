@@ -1,6 +1,21 @@
 [package]
 name = "Slab_Allocator"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[[bin]]
+name = "Slab_Allocator"
+test = false
+bench = false
 
 [dependencies]
+bootloader = { version = "0.9", features = ["map_physical_memory"] }
+volatile = "0.2.6"
+spin = "0.5.2"
+x86_64 = "0.14.2"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
