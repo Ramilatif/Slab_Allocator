@@ -24,7 +24,7 @@ pub enum Color {
 struct ColorCode(u8);
 
 impl ColorCode {
-    fn new(fg: Color, bg: Color) -> Self {
+    const fn new(fg: Color, bg: Color) -> Self {
         ColorCode((bg as u8) << 4 | (fg as u8))
     }
 }
@@ -48,21 +48,26 @@ struct Buffer {
 ///
 /// Maintains the current column position and color. When the cursor reaches the end
 /// of a line or a newline is written, the screen scrolls up by one row.
+/// The VGA buffer at `0xb8000` is accessed directly on each write.
 pub struct Writer {
     col: usize,
     color: ColorCode,
-    buffer: &'static mut Buffer,
 }
 
 impl Writer {
+    /// Returns a mutable reference to the VGA hardware buffer at `0xb8000`.
+    ///
+    /// # Safety
+    /// Assumes the VGA buffer is identity-mapped at `0xb8000` by the bootloader.
+    fn buffer(&self) -> &mut Buffer {
+        unsafe { &mut *(0xb8000 as *mut Buffer) }
+    }
+
     /// Writes a single byte to the VGA buffer.
     ///
     /// A newline (`\n`) triggers scrolling. Any other byte is placed at the current
     /// column on the last row, advancing the cursor. If the column reaches the screen
     /// width, a newline is inserted first.
-    ///
-    /// # Safety
-    /// Writes directly to memory-mapped VGA hardware at `0xb8000`.
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
@@ -72,7 +77,7 @@ impl Writer {
                 }
                 let row = BUFFER_HEIGHT - 1;
                 let col = self.col;
-                self.buffer.chars[row][col].write(ScreenChar {
+                self.buffer().chars[row][col].write(ScreenChar {
                     ascii: byte,
                     color: self.color,
                 });
@@ -84,8 +89,8 @@ impl Writer {
     fn new_line(&mut self) {
         for row in 1..BUFFER_HEIGHT {
             for col in 0..BUFFER_WIDTH {
-                let c = self.buffer.chars[row][col].read();
-                self.buffer.chars[row - 1][col].write(c);
+                let c = self.buffer().chars[row][col].read();
+                self.buffer().chars[row - 1][col].write(c);
             }
         }
         self.clear_row(BUFFER_HEIGHT - 1);
@@ -95,7 +100,7 @@ impl Writer {
     fn clear_row(&mut self, row: usize) {
         let blank = ScreenChar { ascii: b' ', color: self.color };
         for col in 0..BUFFER_WIDTH {
-            self.buffer.chars[row][col].write(blank);
+            self.buffer().chars[row][col].write(blank);
         }
     }
 
@@ -120,10 +125,10 @@ impl fmt::Write for Writer {
     }
 }
 
+/// Global VGA writer, protected by a spinlock for safe concurrent access.
 pub static WRITER: Mutex<Writer> = Mutex::new(Writer {
     col: 0,
     color: ColorCode::new(Color::White, Color::Black),
-    buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
 });
 
 /// Initializes the VGA driver.
