@@ -34,13 +34,16 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("Heap initialized!");
     println!("Slab allocator ready.");
 
-    // Basic smoke tests run at every boot.
-    test_small_alloc();
-    test_many_boxes();
-    test_vec();
-    println!("All boot tests passed!");
-
-    allocator::print_stats();
+    // Normal mode: run tests directly at boot for a quick sanity check.
+    // Test mode (cargo test): test_main() collects them via #[test_case].
+    #[cfg(not(test))]
+    {
+        test_small_alloc();
+        test_many_boxes();
+        test_vec();
+        println!("All boot tests passed!");
+        allocator::print_stats();
+    }
 
     #[cfg(test)]
     test_main();
@@ -49,6 +52,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 }
 
 /// Allocates a single `Box<u64>` and checks its value.
+///
+/// Verifies that the slab allocator returns a valid pointer and that
+/// the written value is correctly read back.
+#[cfg_attr(test, test_case)]
 fn test_small_alloc() {
     use alloc::boxed::Box;
     let x = Box::new(42u64);
@@ -56,10 +63,12 @@ fn test_small_alloc() {
     println!("[ok] test_small_alloc");
 }
 
-/// Allocates 1 000 `Box<usize>` in a loop, checking each value.
+/// Allocates 1 000 `Box<usize>` in a loop and checks each value.
 ///
-/// This exercises the freelist: after the first few allocations the slab
-/// cache is populated and subsequent allocs come from recycled objects.
+/// After the first few allocations the slab cache is populated; subsequent
+/// ones come from recycled objects via the freelist — this test validates
+/// the full alloc → dealloc → reuse path.
+#[cfg_attr(test, test_case)]
 fn test_many_boxes() {
     use alloc::boxed::Box;
     for i in 0..1000usize {
@@ -69,7 +78,11 @@ fn test_many_boxes() {
     println!("[ok] test_many_boxes");
 }
 
-/// Allocates a `Vec` and pushes 100 elements to verify realloc behaviour.
+/// Allocates a `Vec<u32>`, pushes 100 elements, and checks length and values.
+///
+/// Covers internal `Vec` reallocations (buffer growth), which exercises
+/// multiple size classes of the slab allocator.
+#[cfg_attr(test, test_case)]
 fn test_vec() {
     use alloc::vec::Vec;
     let mut v: Vec<u32> = Vec::new();
