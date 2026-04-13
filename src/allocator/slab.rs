@@ -26,6 +26,12 @@ use core::ptr;
 /// The supported size classes in bytes (must be powers of two, ascending).
 const SLAB_SIZES: &[usize] = &[8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
+/// L1 cache line size on x86_64 (bytes).
+const CACHE_LINE_SIZE: usize = 64;
+
+/// Number of distinct color offsets cycled per cache.
+const NUM_COLORS: usize = 4;
+
 // ── FreeNode ─────────────────────────────────────────────────────────────────
 
 /// A node in a [`SlabCache`] freelist.
@@ -51,6 +57,10 @@ pub struct CacheStats {
     pub deallocs: usize,
     /// Currently live objects (`allocs - deallocs`).
     pub live: usize,
+    /// Current slab color offset in bytes.
+    pub color_next: usize,
+    /// Color step in bytes (`max(CACHE_LINE_SIZE, object_size)`).
+    pub color_step: usize,
 }
 
 // ── SlabCache ─────────────────────────────────────────────────────────────────
@@ -59,6 +69,15 @@ pub struct CacheStats {
 ///
 /// Objects are carved out of the shared heap bump region on first use and
 /// returned to the freelist on deallocation, ready for reuse.
+/// A cache that manages a freelist of fixed-size objects for one size class,
+/// with slab coloring to reduce CPU cache line conflicts.
+///
+/// **Slab coloring**: each time a new slab is carved from the bump region, the
+/// start address is shifted by `color_next` bytes. `color_next` advances by
+/// `color_step = max(CACHE_LINE_SIZE, object_size)` and wraps after
+/// `NUM_COLORS` steps. This spreads objects across different cache lines so
+/// that simultaneous accesses to different caches do not compete for the same
+/// L1 cache sets.
 pub struct SlabCache {
     /// Size of every object in this cache, in bytes.
     object_size: usize,
@@ -68,6 +87,12 @@ pub struct SlabCache {
     allocs: usize,
     /// Total deallocations returned to this cache.
     deallocs: usize,
+    /// Current color offset applied to the next slab (bytes).
+    color_next: usize,
+    /// Increment per color step: `max(CACHE_LINE_SIZE, object_size)`.
+    color_step: usize,
+    /// Maximum color offset before wrapping (`color_step * NUM_COLORS`).
+    color_max: usize,
 }
 
 impl SlabCache {
@@ -79,8 +104,23 @@ impl SlabCache {
     /// # use slab_allocator::allocator::slab::SlabCache;
     /// let cache = SlabCache::new(64);
     /// ```
+    /// Creates a new, empty `SlabCache` for objects of `object_size` bytes.
+    ///
+    /// The color step is `max(CACHE_LINE_SIZE, object_size)` so that the color
+    /// offset is always a multiple of `object_size` (preserving alignment) and
+    /// at least one full cache line apart (ensuring cache separation).
     pub const fn new(object_size: usize) -> Self {
-        SlabCache { object_size, free_list: ptr::null_mut(), allocs: 0, deallocs: 0 }
+        // const-friendly max: both are powers of two
+        let color_step = if object_size >= CACHE_LINE_SIZE { object_size } else { CACHE_LINE_SIZE };
+        SlabCache {
+            object_size,
+            free_list: ptr::null_mut(),
+            allocs: 0,
+            deallocs: 0,
+            color_next: 0,
+            color_step,
+            color_max: color_step * NUM_COLORS,
+        }
     }
 
     /// Returns a statistics snapshot for this cache.
@@ -90,6 +130,8 @@ impl SlabCache {
             allocs: self.allocs,
             deallocs: self.deallocs,
             live: self.allocs - self.deallocs,
+            color_next: self.color_next,
+            color_step: self.color_step,
         }
     }
 
@@ -97,25 +139,40 @@ impl SlabCache {
     /// to the freelist.
     ///
     /// Does nothing if the bump region is exhausted.
+    /// Carves up to 4 096 bytes of objects from the bump region and adds them
+    /// to the freelist, applying the current slab color offset.
+    ///
+    /// The color offset shifts the slab start by `color_next` bytes so that
+    /// successive slabs land on different L1 cache sets. `color_next` advances
+    /// by `color_step` and wraps at `color_max`.
     fn grow(&mut self, bump_next: &mut usize, bump_end: usize) {
-        // Align start to object_size so every carved object is naturally aligned.
-        let start = align_up(*bump_next, self.object_size);
-        if start >= bump_end {
+        // Align base to object_size, then apply color offset.
+        // color_step is a multiple of object_size, so colored_start stays aligned.
+        let base = align_up(*bump_next, self.object_size);
+        let colored_start = base + self.color_next;
+
+        // Advance the color for the next slab now, before the early returns.
+        self.color_next += self.color_step;
+        if self.color_next >= self.color_max {
+            self.color_next = 0;
+        }
+
+        if colored_start >= bump_end {
             return;
         }
 
-        let available = (bump_end - start).min(4096);
+        let available = (bump_end - colored_start).min(4096);
         let count = available / self.object_size;
         if count == 0 {
             return;
         }
 
-        *bump_next = start + count * self.object_size;
+        *bump_next = colored_start + count * self.object_size;
 
         for i in 0..count {
-            let node = (start + i * self.object_size) as *mut FreeNode;
-            // SAFETY: The memory range [start, *bump_next) was just reserved
-            // from the bump region and is exclusively owned by this cache.
+            let node = (colored_start + i * self.object_size) as *mut FreeNode;
+            // SAFETY: [colored_start, *bump_next) was just reserved from the
+            // bump region and is exclusively owned by this cache.
             unsafe {
                 (*node).next = self.free_list;
                 self.free_list = node;

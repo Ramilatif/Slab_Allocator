@@ -41,17 +41,18 @@ static ALLOCATOR: Locked<SlabAllocator> = Locked::new(SlabAllocator::new());
 pub fn print_stats() {
     use crate::println;
     let stats = ALLOCATOR.inner.lock().stats();
-    println!("── Slab Allocator Statistics ──────────────");
-    println!("{:>6}B │ {:>8} alloc │ {:>8} free │ {:>6} live",
-        "size", "total", "total", "now");
-    println!("───────────────────────────────────────────");
+    println!("=== Slab Allocator Statistics ===");
+    println!("{:>6}  {:>7}  {:>7}  {:>6}  {:>9}",
+        "size", "allocs", "frees", "live", "color/step");
+    println!("---------------------------------");
     for c in &stats.caches {
-        println!("{:>6}B │ {:>12} │ {:>12} │ {:>10}",
-            c.object_size, c.allocs, c.deallocs, c.live);
+        println!("{:>5}B  {:>7}  {:>7}  {:>6}  {:>4}B/{:<4}B",
+            c.object_size, c.allocs, c.deallocs, c.live,
+            c.color_next, c.color_step);
     }
-    println!("───────────────────────────────────────────");
-    println!("Oversized allocs : {}", stats.oversized_allocs);
-    println!("Bump free        : {} B", stats.bump_free_bytes);
+    println!("---------------------------------");
+    println!("Oversized : {}", stats.oversized_allocs);
+    println!("Bump free : {} B", stats.bump_free_bytes);
 }
 
 /// Maps heap pages and initializes the slab allocator.
