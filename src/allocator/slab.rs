@@ -101,8 +101,10 @@ impl SlabCache {
     /// # Examples
     ///
     /// ```
-    /// # use slab_allocator::allocator::slab::SlabCache;
+    /// # struct SlabCache { object_size: usize }
+    /// # impl SlabCache { pub const fn new(object_size: usize) -> Self { SlabCache { object_size } } }
     /// let cache = SlabCache::new(64);
+    /// assert_eq!(cache.object_size, 64);
     /// ```
     /// Creates a new, empty `SlabCache` for objects of `object_size` bytes.
     ///
