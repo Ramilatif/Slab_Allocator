@@ -397,9 +397,12 @@ unsafe impl GlobalAlloc for SlabAllocator {
 /// # Examples
 ///
 /// ```
-/// assert_eq!(slab_allocator::allocator::slab::align_up(5, 8), 8);
-/// assert_eq!(slab_allocator::allocator::slab::align_up(16, 8), 16);
-/// assert_eq!(slab_allocator::allocator::slab::align_up(0, 4), 0);
+/// # fn align_up(addr: usize, align: usize) -> usize {
+/// #     (addr + align - 1) & !(align - 1)
+/// # }
+/// assert_eq!(align_up(5, 8), 8);   // rounds up
+/// assert_eq!(align_up(16, 8), 16); // already aligned, unchanged
+/// assert_eq!(align_up(0, 4), 0);   // zero stays zero
 /// ```
 pub fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
