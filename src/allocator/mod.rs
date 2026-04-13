@@ -34,6 +34,26 @@ unsafe impl GlobalAlloc for Locked<SlabAllocator> {
 #[global_allocator]
 static ALLOCATOR: Locked<SlabAllocator> = Locked::new(SlabAllocator::new());
 
+/// Prints allocation statistics for all size classes to the VGA console.
+///
+/// Shows per-cache allocs/deallocs/live counts, oversized allocations,
+/// and remaining bump region space.
+pub fn print_stats() {
+    use crate::println;
+    let stats = ALLOCATOR.inner.lock().stats();
+    println!("── Slab Allocator Statistics ──────────────");
+    println!("{:>6}B │ {:>8} alloc │ {:>8} free │ {:>6} live",
+        "size", "total", "total", "now");
+    println!("───────────────────────────────────────────");
+    for c in &stats.caches {
+        println!("{:>6}B │ {:>12} │ {:>12} │ {:>10}",
+            c.object_size, c.allocs, c.deallocs, c.live);
+    }
+    println!("───────────────────────────────────────────");
+    println!("Oversized allocs : {}", stats.oversized_allocs);
+    println!("Bump free        : {} B", stats.bump_free_bytes);
+}
+
 /// Maps heap pages and initializes the slab allocator.
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,

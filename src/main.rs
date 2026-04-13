@@ -40,6 +40,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     test_vec();
     println!("All boot tests passed!");
 
+    allocator::print_stats();
+
     #[cfg(test)]
     test_main();
 

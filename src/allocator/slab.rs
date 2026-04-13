@@ -38,6 +38,23 @@ struct FreeNode {
 
 // ── SlabCache ─────────────────────────────────────────────────────────────────
 
+// ── CacheStats ────────────────────────────────────────────────────────────────
+
+/// Snapshot of allocation statistics for one [`SlabCache`].
+#[derive(Debug, Clone, Copy)]
+pub struct CacheStats {
+    /// Size class this cache serves, in bytes.
+    pub object_size: usize,
+    /// Total number of successful allocations from this cache.
+    pub allocs: usize,
+    /// Total number of deallocations returned to this cache.
+    pub deallocs: usize,
+    /// Currently live objects (`allocs - deallocs`).
+    pub live: usize,
+}
+
+// ── SlabCache ─────────────────────────────────────────────────────────────────
+
 /// A cache that manages a freelist of fixed-size objects for one size class.
 ///
 /// Objects are carved out of the shared heap bump region on first use and
@@ -47,6 +64,10 @@ pub struct SlabCache {
     object_size: usize,
     /// Head of the intrusive freelist (`null` when empty).
     free_list: *mut FreeNode,
+    /// Total allocations served by this cache.
+    allocs: usize,
+    /// Total deallocations returned to this cache.
+    deallocs: usize,
 }
 
 impl SlabCache {
@@ -59,7 +80,17 @@ impl SlabCache {
     /// let cache = SlabCache::new(64);
     /// ```
     pub const fn new(object_size: usize) -> Self {
-        SlabCache { object_size, free_list: ptr::null_mut() }
+        SlabCache { object_size, free_list: ptr::null_mut(), allocs: 0, deallocs: 0 }
+    }
+
+    /// Returns a statistics snapshot for this cache.
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            object_size: self.object_size,
+            allocs: self.allocs,
+            deallocs: self.deallocs,
+            live: self.allocs - self.deallocs,
+        }
     }
 
     /// Carves up to 4 096 bytes of objects from the bump region and adds them
@@ -114,6 +145,7 @@ impl SlabCache {
         unsafe {
             self.free_list = (*node).next;
         }
+        self.allocs += 1;
         node as *mut u8
     }
 
@@ -133,6 +165,7 @@ impl SlabCache {
             (*node).next = self.free_list;
             self.free_list = node;
         }
+        self.deallocs += 1;
     }
 }
 
@@ -157,10 +190,23 @@ unsafe impl Sync for SlabAllocator {}
 /// let mut alloc = SlabAllocator::new();
 /// unsafe { alloc.init(HEAP_START, HEAP_SIZE); }
 /// ```
+/// Global statistics snapshot returned by [`SlabAllocator::stats`].
+#[derive(Debug, Clone)]
+pub struct AllocatorStats {
+    /// Per-cache statistics, one entry per size class.
+    pub caches: [CacheStats; 9],
+    /// Number of allocations served directly from the bump region (size > 2 048 B).
+    pub oversized_allocs: usize,
+    /// Bytes still available in the bump region.
+    pub bump_free_bytes: usize,
+}
+
 pub struct SlabAllocator {
     caches: [SlabCache; 9],
     bump_next: usize,
     bump_end: usize,
+    /// Oversized allocations served by the bump region.
+    oversized_allocs: usize,
 }
 
 impl SlabAllocator {
@@ -182,6 +228,23 @@ impl SlabAllocator {
             ],
             bump_next: 0,
             bump_end: 0,
+            oversized_allocs: 0,
+        }
+    }
+
+    /// Returns a snapshot of allocator statistics.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let stats = allocator.stats();
+    /// assert_eq!(stats.caches[3].object_size, 64);
+    /// ```
+    pub fn stats(&self) -> AllocatorStats {
+        AllocatorStats {
+            caches: core::array::from_fn(|i| self.caches[i].stats()),
+            oversized_allocs: self.oversized_allocs,
+            bump_free_bytes: self.bump_end.saturating_sub(self.bump_next),
         }
     }
 
@@ -238,6 +301,7 @@ unsafe impl GlobalAlloc for SlabAllocator {
                     return ptr::null_mut();
                 }
                 (*this).bump_next = end;
+                (*this).oversized_allocs += 1;
                 start as *mut u8
             }
         }
