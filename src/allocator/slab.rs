@@ -322,6 +322,51 @@ impl SlabAllocator {
     fn cache_index(size: usize) -> Option<usize> {
         SLAB_SIZES.iter().position(|&s| s >= size)
     }
+
+    // ── Test helpers ──────────────────────────────────────────────────────────
+
+    /// Allocates one object — identical logic to `GlobalAlloc::alloc` but takes
+    /// `&mut self` so tests can call it without the unsafe pointer cast.
+    ///
+    /// Only compiled when running `cargo test`.
+    #[cfg(test)]
+    pub fn alloc_test(&mut self, layout: Layout) -> *mut u8 {
+        let size = layout
+            .size()
+            .max(layout.align())
+            .max(core::mem::size_of::<FreeNode>());
+        match Self::cache_index(size) {
+            Some(i) => self.caches[i].alloc(&mut self.bump_next, self.bump_end),
+            None => {
+                let start = align_up(self.bump_next, layout.align());
+                let end = match start.checked_add(layout.size()) {
+                    Some(e) => e,
+                    None => return ptr::null_mut(),
+                };
+                if end > self.bump_end {
+                    return ptr::null_mut();
+                }
+                self.bump_next = end;
+                self.oversized_allocs += 1;
+                start as *mut u8
+            }
+        }
+    }
+
+    /// Deallocates one object — identical logic to `GlobalAlloc::dealloc` but
+    /// takes `&mut self` for safe use in tests.
+    ///
+    /// Only compiled when running `cargo test`.
+    #[cfg(test)]
+    pub fn dealloc_test(&mut self, ptr: *mut u8, layout: Layout) {
+        let size = layout
+            .size()
+            .max(layout.align())
+            .max(core::mem::size_of::<FreeNode>());
+        if let Some(i) = Self::cache_index(size) {
+            self.caches[i].dealloc(ptr);
+        }
+    }
 }
 
 unsafe impl GlobalAlloc for SlabAllocator {

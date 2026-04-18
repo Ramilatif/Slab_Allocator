@@ -1,10 +1,15 @@
 [unstable]
-build-std = ["core", "compiler_builtins", "alloc"]
-build-std-features = ["compiler-builtins-mem"]
 json-target-spec = true
 
-[build]
-target = "x86_64-Slab_Allocator.json"
+# Use these aliases to build / run the bare-metal kernel.
+# They supply build-std and the custom target explicitly so that
+# `cargo test` (which uses the host toolchain) is not affected.
+[alias]
+kbuild = ["build", "-Z", "build-std=core,compiler_builtins,alloc", "-Z", "build-std-features=compiler-builtins-mem", "--target", "x86_64-Slab_Allocator.json"]
+krun   = ["run",   "-Z", "build-std=core,compiler_builtins,alloc", "-Z", "build-std-features=compiler-builtins-mem", "--target", "x86_64-Slab_Allocator.json"]
 
 [target.'cfg(target_os = "none")']
+runner = "bootimage runner"
+
+[target.x86_64-Slab_Allocator]
 runner = "bootimage runner"
